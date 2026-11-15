@@ -78,10 +78,24 @@ select { font: inherit; color: var(--ink); background: #16233a; border: 1px soli
 #dep .champ { text-align: left; padding: 5px 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #dep .champ small { display: block; color: var(--muted); font-size: 11px; }
 #dep .champ.actif { border-color: var(--gold); background: rgba(184, 150, 62, 0.18); }
-#dep ul.trajets { gap: 8px; margin-top: 8px; } #dep ul.trajets li { display: block; border-left: 3px solid var(--gold); padding-left: 8px; }
+#dep ul.trajets { gap: 8px; margin-top: 8px; } #dep ul.trajets li { display: block; border-left: 3px solid rgba(184,150,62,.35); padding: 3px 6px 3px 8px; border-radius: 0 6px 6px 0; cursor: pointer; }
+#dep ul.trajets li.choisi { border-left-color: #e7b84f; background: rgba(184, 150, 62, 0.16); }
 #dep ul.trajets li div { display: grid; grid-template-columns: auto auto 1fr; gap: 8px; align-items: baseline; }
 #dep ul.trajets li div span { color: var(--muted); } #dep ul.trajets li div em { text-align: right; }
 #dep ul.trajets p { margin: 3px 0 0; color: var(--ink); font-size: 12.5px; line-height: 1.5; } #dep ul.trajets i { font-style: normal; color: var(--muted); }
+html, body { -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; overscroll-behavior: none; }
+input { -webkit-user-select: text; user-select: text; }
+button { min-height: 38px; touch-action: manipulation; }
+#results button { min-height: 46px; } #results i { width: 56px; }
+#dep .mini, #dep .arrets button { min-height: 32px; } #dep .arrets small { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; margin-right: 3px; }
+#dep { padding-top: 16px; }
+#dep::before { content: ""; position: absolute; top: 6px; left: 50%; width: 38px; height: 4px; margin-left: -19px; border-radius: 2px; background: rgba(255,255,255,.28); }
+#dep.reduit > :not(h2) { display: none; } #dep.reduit h2 { margin-bottom: 0; }
+#dep h2 { cursor: pointer; }
+#dep button[aria-pressed="true"] { background: rgba(184, 150, 62, 0.3); }
+#dep .quand { align-items: center; margin-top: 6px; } #dep .quand label { margin: 0; display: inline; font-size: 13px; }
+#dep .quand input { font: 16px var(--body); color: var(--ink); background: #16233a; border: 1px solid var(--line); border-radius: 6px; padding: 5px 6px; min-height: 38px; box-sizing: border-box; }
+#dep .alerte { background: #b3261e; color: #fff; font: 600 11.5px var(--body); padding: 1px 6px; border-radius: 3px; text-shadow: none; }
 #dep h2 button { font: 600 13px var(--body); padding: 2px 9px; }
 #dep ul.od li { grid-template-columns: 30px auto 1fr auto; }
 #dep ul.od li span { color: var(--muted); }
@@ -149,6 +163,9 @@ button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
+import { Line2 } from 'three/addons/lines/Line2.js';
+import { LineGeometry } from 'three/addons/lines/LineGeometry.js';
+import { LineMaterial } from 'three/addons/lines/LineMaterial.js';
 
 const D = JSON.parse(document.getElementById('data').textContent);
 const [SX, SY] = D.size, [GW, GH] = D.grid;
@@ -362,12 +379,13 @@ async function chargerReseau(dire) {
     if (k.pas.length < 2) return; k.pas.sort((x, y) => x[0] - y[0]);
     const ids = k.pas.map(x => x[1]), ts = k.pas.map(x => x[2]), sn = ids.map(noeud);
     const r = idx(iR, B.routes, k.route, routes.get(k.route) || [k.route, '', '#888888']), h = idx(iH, B.heads, k.sens);
-    B.all.push([k.mask, r, h, sn, ts]);
+    const fiche = [k.mask, r, h, sn, ts, -1]; B.all.push(fiche);
     sn.slice(0, -1).forEach((n, i) => { const nom = B.names[n]; (B.dep[nom] = B.dep[nom] || []).push([k.mask, ts[i], r, h]); });
     if (!k.trace) return;  // hors de la scène : gardée pour l'itinéraire, pas dessinée
     const tr = traces.get(k.trace), cle = k.trace + '|' + ids.join('>');
     if (!absc.has(cle)) absc.set(cle, projeter(tr, ids.map(id => arrets.get(id).p)));
     const s = idx(iS, B.shapes, k.trace, tr.P.flat().map(Math.round));
+    fiche[5] = B.trips.length;  // tracé et abscisses des arrêts, pour dessiner un itinéraire
     B.trips.push([s, r, k.mask, ts[0], ts.slice(1).map((v, i) => v - ts[i]), absc.get(cle), h, sn]);
   });
   Object.values(B.dep).forEach(v => v.sort((a, b) => a[1] - b[1]));
@@ -494,13 +512,34 @@ const joli = s => s.toLowerCase().replace(/(^|[\s'’.\-(\/])(\p{L})/gu, (m, a, 
 const hhmm = s => `${String(Math.floor(s / 3600) % 24).padStart(2, '0')}:${String(Math.floor(s / 60) % 60).padStart(2, '0')}`;
 // ---------- Cartes du bas : mon trajet, arrêt, ligne, adresse, itinéraire ----------
 let mode = 'trajet', dir = 'aller', selLine = null, selAddr = null, pending = null;
-const itin = { from: null, to: null };
+const itin = { from: null, to: null, h: null };  // h : heure de départ choisie, en secondes ; null = maintenant
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const dansTxt = (t, d) => d - t < 60 ? 'imminent' : 'dans ' + Math.round((d - t) / 60) + ' min';
 const clair = h => { const n = parseInt(h.slice(1), 16); return (0.299 * (n >> 16) + 0.587 * (n >> 8 & 255) + 0.114 * (n & 255)) > 165; };
 const badge = r => `<b style="background:${BUS.routes[r][2]}${clair(BUS.routes[r][2]) ? ';color:#111;text-shadow:none' : ''}">${esc(BUS.routes[r][0])}</b>`;
 const marche = d => Math.round(d * 1.3 / 1.25);  // secondes à pied : 4,5 km/h, détour de 30 % sur la ligne droite
 const minTxt = s => Math.max(1, Math.round(s / 60)) + ' min';
+// Lieux gardés et recherches récentes : dans ce téléphone seulement
+const lireJSON = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) || d; } catch (e) { return d; } };
+const ecrireJSON = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* valable pour cette ouverture */ } };
+const ficheValide = r => r && (r.t === 'a' ? !!BUS.dep[r.nom] : Array.isArray(r.p) && typeof r.label === 'string');
+let favoris = lireJSON('favoris', []).filter(ficheValide), recents = lireJSON('recents', []).filter(ficheValide);
+const ficheDe = l => l.stop ? { t: 'a', nom: l.stop } : { t: 'p', label: l.label, p: l.p };
+const memeFiche = (a, b) => a.t === b.t && (a.t === 'a' ? a.nom === b.nom : a.label === b.label);
+const enLieu = r => r.t === 'a' ? lieuArret(r.nom) : lieuPoint(r.label, r.p);
+const estFavori = l => !!l && favoris.some(x => memeFiche(x, ficheDe(l)));
+function noterRecent(l) { if (!l || l.label === 'Ma position') return; const f = ficheDe(l); recents = [f, ...recents.filter(x => !memeFiche(x, f))].slice(0, 5); ecrireJSON('recents', recents); }
+function basculerFavori(l) { if (!l || l.label === 'Ma position') return; const f = ficheDe(l); favoris = estFavori(l) ? favoris.filter(x => !memeFiche(x, f)) : [...favoris, f].slice(-12); ecrireJSON('favoris', favoris); }
+// Mes lieux, pour remplir un départ ou une arrivée d'un seul geste : les deux arrêts du trajet, les lieux gardés, les récents
+function mesLieux() {
+  const out = [], vu = f => out.some(x => memeFiche(x.f, f));
+  for (const n of [BUS.home, BUS.work]) if (n) out.push({ f: { t: 'a', nom: n }, genre: 'Trajet' });
+  for (const f of favoris) if (!vu(f)) out.push({ f, genre: 'Gardé' });
+  for (const f of recents) if (!vu(f)) out.push({ f, genre: 'Récent' });
+  return out;
+}
+const nomFiche = f => f.t === 'a' ? joli(f.nom) : f.label;
+function ouvrirLieu(l) { if (l.stop) goStop(l.stop, true); else { selAddr = l; goPoint(l.p); allerA('adresse'); } }
 // Un lieu : un arrêt, ou un point (adresse, position) rattaché aux arrêts à moins de 700 m
 const lieuArret = nom => ({ label: joli(nom), stop: nom, nodes: [[BUS.names.indexOf(nom), 0]] });
 function lieuPoint(label, p) {
@@ -537,10 +576,10 @@ function chercherItineraire(de, vers, t0, jour) {
   }
   if (fin < 0) return null;
   const legs = []; let n = fin;
-  if (cible.get(n) > 0) legs.push({ walk: cible.get(n), to: vers.label });
+  if (cible.get(n) > 0) legs.push({ walk: cible.get(n), to: vers.label, a: BUS.npos[n], b: vers.p });
   while (n >= 0 && prev[n]) { const p = prev[n];
-    if (p.trip !== undefined) { const tr = BUS.all[p.trip]; legs.push({ r: tr[1], h: tr[2], from: p.board.node, dep: p.board.dep, to: n, arr: p.arr }); n = p.board.node; }
-    else { if (p.walk > 0) legs.push({ walk: p.walk, to: joli(BUS.names[n]) }); n = p.from; } }
+    if (p.trip !== undefined) { const tr = BUS.all[p.trip]; legs.push({ r: tr[1], h: tr[2], trip: p.trip, from: p.board.node, dep: p.board.dep, to: n, arr: p.arr }); n = p.board.node; }
+    else { if (p.walk > 0) legs.push({ walk: p.walk, to: joli(BUS.names[n]), a: p.from >= 0 ? BUS.npos[p.from] : de.p, b: BUS.npos[n] }); n = p.from; } }
   legs.reverse();
   const bus = legs.filter(l => l.r !== undefined), avant = legs.slice(0, legs.indexOf(bus[0])).reduce((s, l) => s + (l.walk || 0), 0);
   return { legs, bus: bus.length, depart: bus.length ? bus[0].dep - avant : t0, premier: bus.length ? bus[0].dep : t0, arrivee: best };
@@ -555,13 +594,73 @@ function itineraires(t0) {
     if (!r.bus) break; t = r.depart + 60; }
   return out;
 }
-function allerA(m) { mode = m; if (m !== 'ligne') surligner(null); renderDep(); }
+// Marche sur le réseau de voies : service d'itinéraire piéton de la Géoplateforme (IGN), pour le trajet affiché
+function versWgs(x, y) {
+  const dx = x + OX - L93.xs, dy = L93.ys - (y + OY), R = Math.hypot(dx, dy), g = Math.atan2(dx, dy), L = -Math.log(R / L93.C) / L93.n; let f = 2 * Math.atan(Math.exp(L)) - Math.PI / 2;
+  for (let i = 0; i < 8; i++) f = 2 * Math.atan(Math.pow((1 + L93.e * Math.sin(f)) / (1 - L93.e * Math.sin(f)), L93.e / 2) * Math.exp(L)) - Math.PI / 2;
+  return [3 + g / L93.n * 180 / Math.PI, f * 180 / Math.PI];
+}
+const pietons = new Map(), clePieton = (a, b) => [a[0], a[1], b[0], b[1]].map(Math.round).join(',');
+const pietonDe = l => (l.a && l.b ? pietons.get(clePieton(l.a, l.b)) : null);
+const marcheDe = l => { const p = pietonDe(l); return p && p.pts ? p.secs : l.walk; };
+function demanderPieton(l) {
+  if (!l.a || !l.b || Math.hypot(l.a[0] - l.b[0], l.a[1] - l.b[1]) < 30) return; const k = clePieton(l.a, l.b); if (pietons.has(k)) return;
+  pietons.set(k, { attente: true }); const A = versWgs(l.a[0], l.a[1]), B = versWgs(l.b[0], l.b[1]);
+  fetch(`https://data.geopf.fr/navigation/itineraire?resource=bdtopo-osrm&profile=pedestrian&optimization=shortest&getSteps=false&geometryFormat=geojson&start=${A[0].toFixed(6)},${A[1].toFixed(6)}&end=${B[0].toFixed(6)},${B[1].toFixed(6)}`)
+    .then(r => r.json()).then(j => { if (!j.geometry || !isFinite(j.duration)) throw new Error('réponse vide');
+      pietons.set(k, { pts: j.geometry.coordinates.map(c => local(c[0], c[1])), secs: Math.round(j.duration), m: Math.round(j.distance) }); traceCle = ''; if (mode === 'itin') renderDep(); })
+    .catch(() => { pietons.set(k, { echec: true }); });
+}
+// Heures d'un trajet une fois la marche réelle connue, et correspondance devenue trop courte
+function ajuster(it) {
+  const L = it.legs, bus = L.filter(l => l.r !== undefined); if (!bus.length) return { depart: it.depart, arrivee: it.depart + L.reduce((s, l) => s + marcheDe(l), 0), serre: false };
+  const i0 = L.indexOf(bus[0]), i1 = L.indexOf(bus[bus.length - 1]); let serre = false;
+  for (let k = i0 + 1; k < i1; k++) if (L[k].r === undefined) { let p = k - 1, n = k + 1; while (L[p].r === undefined) p--; while (L[n].r === undefined) n++; if (L[p].arr + marcheDe(L[k]) > L[n].dep) serre = true; }
+  return { depart: bus[0].dep - L.slice(0, i0).reduce((s, l) => s + marcheDe(l), 0), arrivee: bus[bus.length - 1].arr + L.slice(i1 + 1).reduce((s, l) => s + marcheDe(l), 0), serre };
+}
+// Itinéraire en surbrillance : le trajet choisi se dessine par-dessus tout, les autres tracés s'effacent
+const traceGrp = new THREE.Group(); scene.add(traceGrp);
+const traceMats = []; let traceCle = '', itinSel = 0;
+function effacerTrace() { for (const o of [...traceGrp.children]) { traceGrp.remove(o); o.geometry.dispose(); } traceMats.length = 0; traceCle = ''; }
+function pointsDe(l) {  // points d'un tronçon, en mètres de la scène
+  if (l.r === undefined) { const p = pietonDe(l); return p && p.pts ? p.pts : l.a && l.b ? [l.a, l.b] : null; }
+  const f = BUS.all[l.trip], sn = f[3], i = sn.indexOf(l.from), j = sn.indexOf(l.to, i + 1); if (i < 0 || j < 0) return null;
+  if (f[5] < 0) return sn.slice(i, j + 1).map(n => BUS.npos[n]);  // course hors de la maquette : d'arrêt en arrêt
+  const tr = BUS.trips[f[5]], sh = shapes[tr[0]], d0 = tr[5][i], d1 = tr[5][j], pts = [along(sh, d0)];
+  for (let k = 0; k < sh.cum.length; k++) if (sh.cum[k] > d0 && sh.cum[k] < d1) pts.push(sh.pts[k]);
+  pts.push(along(sh, d1)); return pts;
+}
+function montrerTrace(it, cadrer) {
+  for (const l of it.legs) if (l.r === undefined) demanderPieton(l);
+  const cle = it.legs.map(l => l.r === undefined ? 'p' + l.walk : l.trip + ':' + l.dep).join('|');
+  if (cle !== traceCle) {
+    effacerTrace(); traceCle = cle;
+    const ajouter = (pos, opts, ordre) => { const g = new LineGeometry(); g.setPositions(pos); const m = new LineMaterial(Object.assign({ depthTest: false, transparent: true }, opts)); m.resolution.set(innerWidth, innerHeight); traceMats.push(m);
+      const o = new Line2(g, m); o.computeLineDistances(); o.renderOrder = ordre; o.frustumCulled = false; traceGrp.add(o); };
+    for (const l of it.legs) {
+      const brut = pointsDe(l); if (!brut) continue; const pos = [];
+      for (let k = 0; k < brut.length - 1; k++) { const a = brut[k], b = brut[k + 1], n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 25));
+        for (let u = 0; u <= n; u++) { const x = a[0] + (b[0] - a[0]) * u / n, y = a[1] + (b[1] - a[1]) * u / n; if (inBox(x, y)) pos.push(x, groundAt(x, y) + 7, -y); } }
+      if (pos.length < 6) continue;
+      if (l.r === undefined) ajouter(pos, { color: 0xffffff, linewidth: 4, dashed: true, dashSize: 14, gapSize: 12 }, 21);
+      else { ajouter(pos, { color: 0xffffff, linewidth: 10 }, 20); ajouter(pos, { color: new THREE.Color(BUS.routes[l.r][2]).getHex(), linewidth: 6 }, 21); }
+    }
+    surligner(-1);
+  }
+  if (cadrer) { let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const l of it.legs) for (const p of pointsDe(l) || []) if (inBox(p[0], p[1])) { x0 = Math.min(x0, p[0]); x1 = Math.max(x1, p[0]); y0 = Math.min(y0, p[1]); y1 = Math.max(y1, p[1]); }
+    if (isFinite(x0)) { const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2; marker.visible = false; viser(cx, groundAt(cx, cy), cy, Math.max(1, Math.max(x1 - x0, y1 - y0) / (plan ? 380 : 300))); } }
+}
+addEventListener('resize', () => { for (const m of traceMats) m.resolution.set(innerWidth, innerHeight); });
+function allerA(m) { mode = m; reduit = false; if (m !== 'itin') effacerTrace(); if (m !== 'ligne') surligner(null); renderDep(); }
 function retour() { if (BUS.home && BUS.work) goStop(dir === 'aller' ? BUS.home : BUS.work); else allerA('choix'); }
-function poserLieu(quoi, lieu) { itin[quoi] = lieu; pending = null; allerA('itin'); }
+let cadrerItin = false, reduit = false;
+function poserLieu(quoi, lieu) { itin[quoi] = lieu; pending = null; itinSel = 0; cadrerItin = true; noterRecent(lieu); allerA('itin'); }
 function renderDep() {
   const box = document.getElementById('dep'), t = simSecs(), fermer = '<button type="button" data-act="retour" aria-label="Revenir à mon trajet">×</button>';
-  const lieuxBtn = `<div class="row"><button type="button" data-act="de">Partir d'ici</button><button type="button" data-act="vers">Aller ici</button></div>`;
-  box.hidden = false;
+  const courant = mode === 'arret' ? lieuArret(selStop) : mode === 'adresse' ? selAddr : null, garde = estFavori(courant);
+  const lieuxBtn = `<div class="row"><button type="button" data-act="de">Partir d'ici</button><button type="button" data-act="vers">Aller ici</button>${courant && courant.label !== 'Ma position' ? `<button type="button" data-act="fav" aria-pressed="${garde}">${garde ? 'Gardé' : 'Garder'}</button>` : ''}</div>`;
+  box.hidden = false; box.classList.toggle('reduit', reduit);
   if (mode === 'choix' || (mode === 'trajet' && !(BUS.home && BUS.work))) {
     const opts = sel => '<option value="">Choisir…</option>' + Object.keys(BUS.dep).sort((a, b) => a.localeCompare(b, 'fr')).map(n => `<option value="${esc(n)}"${n === sel ? ' selected' : ''}>${esc(joli(n))}</option>`).join('');
     box.innerHTML = `<h2>Vos deux arrêts</h2><label>Départ du matin<select id="cHome">${opts(BUS.home)}</select></label><label>Arrivée du matin<select id="cWork">${opts(BUS.work)}</select></label>
@@ -596,17 +695,26 @@ function renderDep() {
     const champ = (k, lib) => `<button type="button" data-act="champ-${k}" class="champ${pending === k ? ' actif' : ''}"><small>${lib}</small>${itin[k] ? esc(itin[k].label) : pending === k ? 'Cherchez en haut…' : 'Choisir'}</button>`;
     let corps = '';
     if (itin.from && itin.to) {
-      const res = itineraires(t);
-      corps = res.length ? '<ul class="trajets">' + res.map(x => `<li><div><strong>${hhmm(x.depart)} → ${hhmm(x.arrivee)}</strong><span>${minTxt(x.arrivee - x.depart)}</span><em>${x.bus ? dansTxt(t, x.depart) : ''}</em></div><p>` +
-        x.legs.map(l => l.r === undefined ? `à pied ${minTxt(l.walk)}` : `${badge(l.r)} ${esc(joli(BUS.names[l.from]))} ${hhmm(l.dep)} → ${esc(joli(BUS.names[l.to]))} ${hhmm(l.arr)}`).join(' <i>›</i> ') + '</p></li>').join('') + '</ul>'
+      const res = itineraires(itin.h == null ? t : itin.h);
+      itinSel = Math.min(itinSel, Math.max(0, res.length - 1));
+      if (res.length) { montrerTrace(res[itinSel], cadrerItin); cadrerItin = false; } else { effacerTrace(); surligner(null); }
+      corps = res.length ? '<ul class="trajets">' + res.map((x, i) => { const h = ajuster(x); return `<li data-k="${i}"${i === itinSel ? ' class="choisi"' : ''}><div><strong>${hhmm(h.depart)} → ${hhmm(h.arrivee)}</strong><span>${minTxt(h.arrivee - h.depart)}</span><em>${x.bus && itin.h == null ? dansTxt(t, h.depart) : ''}</em></div><p>` +
+        x.legs.map(l => l.r === undefined ? `à pied ${pietonDe(l) && pietonDe(l).pts ? '' : 'env. '}${minTxt(marcheDe(l))}${pietonDe(l) && pietonDe(l).pts ? ' (' + pietonDe(l).m + ' m)' : ''}` : `${badge(l.r)} ${esc(joli(BUS.names[l.from]))} ${hhmm(l.dep)} → ${esc(joli(BUS.names[l.to]))} ${hhmm(l.arr)}`).join(' <i>›</i> ') + (h.serre ? '<br><b class="alerte">Correspondance trop courte à pied</b>' : '') + '</p></li>'; }).join('') + '</ul>'
         : '<p style="margin:6px 0 0;color:var(--ink)">Aucun trajet en bus trouvé d\'ici la fin du service ce jour-là.</p>';
-    } else corps = `<p style="margin:6px 0 0;color:var(--ink)">${pending ? 'Tapez une adresse, un arrêt ou une ligne dans la recherche.' : 'Choisissez un départ et une arrivée.'}</p>`;
+    } else corps = `<p style="margin:6px 0 0;color:var(--ink)">${pending ? 'Choisissez ci-dessous, ou tapez un arrêt ou une adresse dans la recherche.' : 'Choisissez un départ et une arrivée.'}</p>`;
+    const lieux = pending ? mesLieux() : [];
+    if (lieux.length) corps = '<div class="arrets" style="margin-top:6px">' + lieux.map((x, i) => `<button type="button" data-lieu="${i}"><small>${x.genre}</small> ${esc(nomFiche(x.f))}</button>`).join('') + '</div>' + corps;
+    const tItin = itin.h == null ? t : itin.h;
     box.innerHTML = `<h2>Itinéraire${fermer}</h2><div class="champs">${champ('from', 'Départ')}<button type="button" data-act="inverser" aria-label="Inverser départ et arrivée">⇅</button>${champ('to', 'Arrivée')}</div>
-      <div class="row" style="margin-top:6px"><button type="button" data-act="ici" class="mini">Partir de ma position</button></div>${corps}<p>Départ à ${hhmm(t)}, ${DAYLABEL[dayType]}. Réseau Envibus seulement, horaires théoriques ; marche estimée.</p>`;
+      <div class="row quand"><label for="itH">Partir à</label><input type="time" id="itH" value="${hhmm(tItin)}"><button type="button" data-act="maint" aria-pressed="${itin.h == null}">Maintenant</button><button type="button" data-act="ici">Ma position</button></div>${corps}<p>Touchez un trajet pour le voir sur la carte. ${DAYLABEL[dayType].replace(/^./, c => c.toUpperCase())}. Réseau Envibus seulement, horaires théoriques. Marche calculée sur les voies pour le trajet affiché, estimée (« env. ») pour les autres.</p>`;
+    document.getElementById('itH').addEventListener('change', e => { const [h, m] = e.target.value.split(':').map(Number); if (isFinite(h) && isFinite(m)) { itin.h = h * 3600 + m * 60; itinSel = 0; cadrerItin = true; e.target.blur(); renderDep(); } });
   }
 }
 document.getElementById('dep').addEventListener('click', e => {
   const s = e.target.closest('button[data-stop]'); if (s) { goStop(s.dataset.stop, true); return; }
+  const li = e.target.closest('li[data-k]'); if (li) { itinSel = +li.dataset.k; cadrerItin = true; renderDep(); return; }
+  const lb = e.target.closest('button[data-lieu]'); if (lb && pending) { poserLieu(pending, enLieu(mesLieux()[+lb.dataset.lieu].f)); return; }
+  if (!e.target.closest('button, select, input, label, li')) { reduit = !reduit; document.getElementById('dep').classList.toggle('reduit', reduit); return; }  // toucher le titre replie ou déplie le panneau
   const b = e.target.closest('button[data-act]'); if (!b) return; const a = b.dataset.act;
   if (a === 'retour') retour();
   else if (a === 'sens') goStop(dir === 'aller' ? BUS.work : BUS.home);
@@ -614,13 +722,15 @@ document.getElementById('dep').addEventListener('click', e => {
   else if (a === 'ok') { const h = document.getElementById('cHome').value, w = document.getElementById('cWork').value; if (!h || !w || h === w) return;
     BUS.home = h; BUS.work = w; try { localStorage.setItem('trajet-depart', h); localStorage.setItem('trajet-arrivee', w); } catch (err) { /* valable pour cette ouverture seulement */ }
     majSignets(); goStop(now0.secs < 12 * 3600 ? BUS.home : BUS.work); }
+  else if (a === 'fav') { basculerFavori(mode === 'arret' ? lieuArret(selStop) : selAddr); renderDep(); }
+  else if (a === 'maint') { itin.h = null; itinSel = 0; cadrerItin = true; renderDep(); }
   else if (a === 'de' || a === 'vers') poserLieu(a === 'de' ? 'from' : 'to', mode === 'arret' ? lieuArret(selStop) : selAddr);
   else if (a === 'champ-from' || a === 'champ-to') { pending = a.slice(6); renderDep(); const q = document.getElementById('q'); q.value = ''; q.focus(); }
-  else if (a === 'inverser') { [itin.from, itin.to] = [itin.to, itin.from]; renderDep(); }
+  else if (a === 'inverser') { [itin.from, itin.to] = [itin.to, itin.from]; itinSel = 0; cadrerItin = true; renderDep(); }
   else if (a === 'ici') {
     if (!navigator.geolocation) { b.textContent = 'Position indisponible'; return; }
-    b.textContent = 'Recherche de la position…';
-    navigator.geolocation.getCurrentPosition(pos => poserLieu('from', lieuPoint('Ma position', local(pos.coords.longitude, pos.coords.latitude))), () => { b.textContent = 'Position refusée ou indisponible'; }, { enableHighAccuracy: true, timeout: 10000 });
+    b.textContent = 'Recherche…';
+    navigator.geolocation.getCurrentPosition(pos => poserLieu('from', lieuPoint('Ma position', local(pos.coords.longitude, pos.coords.latitude))), () => { b.textContent = 'Position refusée'; }, { enableHighAccuracy: true, timeout: 10000 });
   }
 });
 // Fiche d'un bus : toucher un bus sur la carte
@@ -658,7 +768,7 @@ renderer.domElement.addEventListener('pointerup', e => {
 function goStop(name, garder) {
   selStop = name;
   if (!garder && (name === BUS.home || name === BUS.work)) { mode = 'trajet'; dir = name === BUS.home ? 'aller' : 'retour'; } else mode = 'arret';
-  surligner(null);
+  effacerTrace(); surligner(null); reduit = false;
   const g = groups.find(g => g.name === name);
   if (g) { const z = groundAt(g.x, g.y); viser(g.x, z, g.y, 1); marker.position.set(g.x, z + 1.5, -g.y); marker.visible = true; }
   else marker.visible = false;  // arrêt hors de la maquette : la fiche seule
@@ -678,7 +788,7 @@ majSignets();
 for (const b of document.querySelectorAll('#signets button[data-stop]')) b.addEventListener('click', () => goStop(b.dataset.stop));
 document.getElementById('bItin').addEventListener('click', () => { if (!itin.from && BUS.home) itin.from = lieuArret(dir === 'aller' ? BUS.home : BUS.work); allerA('itin'); });
 const frDate = a => a ? `${a.slice(6, 8)}/${a.slice(4, 6)}/${a.slice(0, 4)}` : '?';
-const srcTxt = `Horaires théoriques Envibus (CASA), fichier ${BUS.ancien ? 'gardé dans ce téléphone, ' : ''}du ${BUS.lu ? BUS.lu.split('-').reverse().join('/') : '?'}, valable du ${frDate(BUS.valid[0])} au ${frDate(BUS.valid[1])}, via transport.data.gouv.fr · Adresses : Géoplateforme IGN (Base adresse nationale) · IGN BD TOPO® (bâtiments à moins de 300 m de la ligne A) et RGE ALTI® · bus grossis ×2 · Page assistée par IA (Claude), 14/11/2026`;
+const srcTxt = `Horaires théoriques Envibus (CASA), fichier ${BUS.ancien ? 'gardé dans ce téléphone, ' : ''}du ${BUS.lu ? BUS.lu.split('-').reverse().join('/') : '?'}, valable du ${frDate(BUS.valid[0])} au ${frDate(BUS.valid[1])}, via transport.data.gouv.fr · Adresses et marche à pied : services de la Géoplateforme IGN, auxquels la page envoie ce que vous cherchez et les deux bouts de chaque marche · IGN BD TOPO® (bâtiments à moins de 300 m de la ligne A) et RGE ALTI® · bus grossis ×2 · Page assistée par IA (Claude), 14/11/2026`;
 document.getElementById('srcin').textContent = srcTxt; document.getElementById('src').textContent = srcTxt;
 
 // ---------- Recherche : lignes, arrêts, adresses ----------
@@ -693,7 +803,7 @@ function montrer() {
 function chercher() {
   const brut = qEl.value.trim(), s = sansAccent(brut); clearTimeout(minuteur); const moi = ++vague;
   if (!s.length) { proposer(); return; }
-  const lignes = []; BUS.routes.forEach((r, i) => { const c = sansAccent(r[0]); if (c === s || (s.length <= 3 && c.startsWith(s)) || (s.length >= 4 && sansAccent(r[1]).includes(s))) lignes.push({ type: 'Ligne', html: `${badge(i)}<span>${esc(joli(r[1] || ''))}</span>`, go: () => { selLine = i; mode = 'ligne'; surligner(i); renderDep(); }, ordre: c === s ? 0 : c.startsWith(s) ? 1 : 2 }); });
+  const lignes = []; BUS.routes.forEach((r, i) => { const c = sansAccent(r[0]); if (c === s || (s.length <= 3 && c.startsWith(s)) || (s.length >= 4 && sansAccent(r[1]).includes(s))) lignes.push({ type: 'Ligne', html: `${badge(i)}<span>${esc(joli(r[1] || ''))}</span>`, go: () => { selLine = i; mode = 'ligne'; effacerTrace(); surligner(i); renderDep(); }, ordre: c === s ? 0 : c.startsWith(s) ? 1 : 2 }); });
   lignes.sort((a, b) => a.ordre - b.ordre);
   const arr = s.length < 2 ? [] : nomsArrets.filter(n => n[1].includes(s)).sort((a, b) => (b[1].startsWith(s) - a[1].startsWith(s)) || a[0].localeCompare(b[0], 'fr')).slice(0, 6)
     .map(n => ({ type: 'Arrêt', html: `<span>${esc(joli(n[0]))}</span>`, lieu: () => lieuArret(n[0]), go: () => goStop(n[0], true) }));
@@ -712,7 +822,7 @@ function chercher() {
 // Recherche vide : les arrêts autour de soi, puis ses deux arrêts
 function proposer() {
   items = [{ type: 'Position', html: '<span>Arrêts autour de moi</span>', go: autourDeMoi }];
-  for (const n of [BUS.home, BUS.work]) if (n) items.push({ type: 'Arrêt', html: `<span>${esc(joli(n))}</span>`, lieu: () => lieuArret(n), go: () => goStop(n, true) });
+  for (const x of mesLieux()) { const l = enLieu(x.f); items.push({ type: x.genre, html: `<span>${esc(nomFiche(x.f))}</span>`, lieu: () => l, go: () => ouvrirLieu(l) }); }
   montrer();
 }
 function autourDeMoi() {
@@ -727,7 +837,7 @@ document.getElementById('searchForm').addEventListener('submit', e => { e.preven
 resEl.addEventListener('click', e => {
   const b = e.target.closest('button[data-i]'); if (!b) return; const x = items[+b.dataset.i];
   qEl.value = ''; qEl.blur(); items = []; montrer();
-  if (pending && x.lieu) poserLieu(pending, x.lieu()); else { pending = null; x.go(); }
+  if (pending && x.lieu) poserLieu(pending, x.lieu()); else { pending = null; if (x.lieu) noterRecent(x.lieu()); x.go(); }
 });
 const showDay = () => { document.getElementById('daytype').textContent = DAYLABEL[dayType]; };
 showDay();
@@ -756,7 +866,7 @@ function updateBuses() {
   if (m !== lastLabel) {
     lastLabel = m;
     clockEl.textContent = `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
-    renderDep();
+    { const ae = document.activeElement; if (!(ae && /^(SELECT|INPUT)$/.test(ae.tagName) && document.getElementById('dep').contains(ae))) renderDep(); }
   }
   nbusEl.textContent = j ? `· ${j} bus sur la carte` : '· aucun bus sur la carte';
 }
