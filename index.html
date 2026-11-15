@@ -104,13 +104,14 @@ button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 <div id="scene"></div>
 <div id="loading">Construction de la maquette…</div>
 <div class="panel" id="panel">
-  <form id="searchForm" role="search"><input id="q" type="search" placeholder="Adresse, arrêt ou ligne" autocomplete="off" enterkeyhint="search" aria-label="Chercher une adresse, un arrêt ou une ligne"></form>
+  <form id="searchForm" role="search"><input id="q" type="search" placeholder="Arrêt, ligne ou adresse" autocomplete="off" enterkeyhint="search" aria-label="Chercher une adresse, un arrêt ou une ligne"></form>
   <ul id="results" hidden></ul>
   <div class="clock"><strong id="clock">--:--</strong><span id="daytype"></span><span id="nbus"></span></div>
   <div class="row" id="signets" style="margin:6px 0 2px">
     <button type="button" id="sHome" data-stop="" hidden></button>
     <button type="button" id="sWork" data-stop="" hidden></button>
     <button type="button" id="bItin">Itinéraire</button>
+    <button type="button" id="bVue" aria-pressed="false" aria-label="Basculer entre la vue en plan et la vue en relief">Vue 2D</button>
   </div>
   <div class="body">
     <div class="row" style="margin:6px 0 4px">
@@ -586,6 +587,7 @@ function renderDep() {
       ? '<ul class="sens">' + liste.slice(0, 4).map(([h, s]) => `<li><span>vers ${esc(joli(BUS.heads[h]) || '?')}</span><em>${s.n} départs, de ${hhmm(s.min)} à ${hhmm(s.max)}</em></li>`).join('') + '</ul>' +
         `<p style="margin:6px 0 3px">Arrêts vers ${esc(joli(BUS.heads[plus[0]]))} :</p><div class="arrets">` + plus[1].sn.map(n => `<button type="button" data-stop="${esc(BUS.names[n])}">${esc(joli(BUS.names[n]))}</button>`).join('') + '</div>'
       : '<p style="margin:0;color:var(--ink)">Cette ligne ne circule pas ce jour-là.</p>') + `<p>Horaires théoriques (${DAYLABEL[dayType]}).</p>`;
+  } else if (mode === 'adresse' && !selAddr) { return;
   } else if (mode === 'adresse') {
     const pres = selAddr.nodes.slice(0, 4);
     box.innerHTML = `<h2>${esc(selAddr.label)}${fermer}</h2><p style="margin:0 0 3px;color:var(--ink)">Arrêts les plus proches :</p><div class="arrets">` +
@@ -658,14 +660,14 @@ function goStop(name, garder) {
   if (!garder && (name === BUS.home || name === BUS.work)) { mode = 'trajet'; dir = name === BUS.home ? 'aller' : 'retour'; } else mode = 'arret';
   surligner(null);
   const g = groups.find(g => g.name === name);
-  if (g) { const z = groundAt(g.x, g.y); controls.target.set(g.x, z, -g.y); camera.position.set(g.x + 240, z + 330, -g.y + 380); controls.update(); marker.position.set(g.x, z + 1.5, -g.y); marker.visible = true; }
+  if (g) { const z = groundAt(g.x, g.y); viser(g.x, z, g.y, 1); marker.position.set(g.x, z + 1.5, -g.y); marker.visible = true; }
   else marker.visible = false;  // arrêt hors de la maquette : la fiche seule
   for (const b of document.querySelectorAll('#signets button[data-stop]')) b.setAttribute('aria-pressed', String(b.dataset.stop === name && mode === 'trajet'));
   renderDep();
 }
 function goPoint(p) {
   if (!inBox(p[0], p[1])) { marker.visible = false; return; }
-  const z = groundAt(p[0], p[1]); controls.target.set(p[0], z, -p[1]); camera.position.set(p[0] + 240, z + 330, -p[1] + 380); controls.update(); marker.position.set(p[0], z + 1.5, -p[1]); marker.visible = true;
+  const z = groundAt(p[0], p[1]); viser(p[0], z, p[1], 1); marker.position.set(p[0], z + 1.5, -p[1]); marker.visible = true;
 }
 // Mettre une ligne en avant : les autres tracés s'effacent
 function surligner(r) { for (const l of lineObjs) { l.obj.material.opacity = r === null ? 0.55 : l.ri === r ? 1 : 0.08; } }
@@ -690,7 +692,7 @@ function montrer() {
 }
 function chercher() {
   const brut = qEl.value.trim(), s = sansAccent(brut); clearTimeout(minuteur); const moi = ++vague;
-  if (!s.length) { items = []; montrer(); return; }
+  if (!s.length) { proposer(); return; }
   const lignes = []; BUS.routes.forEach((r, i) => { const c = sansAccent(r[0]); if (c === s || (s.length <= 3 && c.startsWith(s)) || (s.length >= 4 && sansAccent(r[1]).includes(s))) lignes.push({ type: 'Ligne', html: `${badge(i)}<span>${esc(joli(r[1] || ''))}</span>`, go: () => { selLine = i; mode = 'ligne'; surligner(i); renderDep(); }, ordre: c === s ? 0 : c.startsWith(s) ? 1 : 2 }); });
   lignes.sort((a, b) => a.ordre - b.ordre);
   const arr = s.length < 2 ? [] : nomsArrets.filter(n => n[1].includes(s)).sort((a, b) => (b[1].startsWith(s) - a[1].startsWith(s)) || a[0].localeCompare(b[0], 'fr')).slice(0, 6)
@@ -707,6 +709,19 @@ function chercher() {
     } catch (e) { /* pas d'adresses : les arrêts et les lignes restent proposés */ }
   }, 350);
 }
+// Recherche vide : les arrêts autour de soi, puis ses deux arrêts
+function proposer() {
+  items = [{ type: 'Position', html: '<span>Arrêts autour de moi</span>', go: autourDeMoi }];
+  for (const n of [BUS.home, BUS.work]) if (n) items.push({ type: 'Arrêt', html: `<span>${esc(joli(n))}</span>`, lieu: () => lieuArret(n), go: () => goStop(n, true) });
+  montrer();
+}
+function autourDeMoi() {
+  const box = document.getElementById('dep'); box.hidden = false; box.innerHTML = '<h2>Arrêts autour de moi</h2><p style="margin:0;color:var(--ink)">Recherche de la position…</p>';
+  if (!navigator.geolocation) { box.querySelector('p').textContent = 'Position indisponible sur cet appareil.'; return; }
+  navigator.geolocation.getCurrentPosition(pos => { const p = local(pos.coords.longitude, pos.coords.latitude); selAddr = lieuPoint('Ma position', p); goPoint(p); allerA('adresse'); },
+    () => { mode = 'adresse'; selAddr = null; box.innerHTML = '<h2>Arrêts autour de moi<button type="button" data-act="retour" aria-label="Revenir à mon trajet">×</button></h2><p style="margin:0;color:var(--ink)">Position refusée ou indisponible. Tapez un nom d\'arrêt ou une adresse dans la recherche.</p>'; }, { enableHighAccuracy: true, timeout: 10000 });
+}
+qEl.addEventListener('focus', () => { if (!qEl.value.trim()) proposer(); });
 qEl.addEventListener('input', chercher);
 document.getElementById('searchForm').addEventListener('submit', e => { e.preventDefault(); if (items[0]) resEl.querySelector('button').click(); });
 resEl.addEventListener('click', e => {
@@ -759,10 +774,28 @@ scene.add(sun, sun.target);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.maxPolarAngle = Math.PI / 2.1;
+// Vue en plan : caméra à la verticale, nord en haut, un doigt pour déplacer ; le choix est gardé dans le téléphone
+let plan = false;
+try { plan = localStorage.getItem('vue') === '2d'; } catch (e) { /* vue en relief par défaut */ }
+function viser(x, z, y, recul) {  // cadrer un point, dans la vue en cours ; recul = 1 pour un arrêt, plus pour une vue large
+  controls.target.set(x, z, -y);
+  if (plan) camera.position.set(x, z + 900 * recul, -y + 0.5); else camera.position.set(x + 240 * recul, z + 330 * recul, -y + 380 * recul);
+  controls.update();
+}
+function reglerVue(garder) {
+  controls.minPolarAngle = 0; controls.maxPolarAngle = plan ? 0 : Math.PI / 2.1; controls.enableRotate = !plan;
+  controls.touches = plan ? { ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_PAN } : { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+  controls.mouseButtons = plan ? { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN } : { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.DOLLY, RIGHT: THREE.MOUSE.PAN };
+  renderer.shadowMap.enabled = !plan; sun.castShadow = !plan;
+  const b = document.getElementById('bVue'); b.setAttribute('aria-pressed', String(plan)); b.textContent = plan ? 'Vue 3D' : 'Vue 2D';
+  if (garder) { const c = controls.target, d = camera.position.distanceTo(c); viser(c.x, c.y, -c.z, Math.max(0.4, d / (plan ? 900 : 560))); }
+}
+document.getElementById('bVue').addEventListener('click', () => { plan = !plan; try { localStorage.setItem('vue', plan ? '2d' : '3d'); } catch (e) { /* choix valable pour cette ouverture */ } reglerVue(true); });
+reglerVue(false);
 controls.minDistance = 40; controls.maxDistance = 12000;
 
 // Vues (coordonnées locales en mètres, Lambert 93 − origine)
-document.getElementById('vAll').addEventListener('click', () => { controls.target.set(SX / 2, 60, -SY / 2); camera.position.set(SX / 2 + 2600, 3660, -SY / 2 + 3600); controls.update(); });
+document.getElementById('vAll').addEventListener('click', () => { viser(SX / 2, 60, SY / 2, 10); });
 
 document.getElementById('legend').innerHTML = LABELS.map((l, i) => counts[i] ? `<span><i style="background:${COLORS[i]}"></i>${l}</span>` : '').join('');
 document.getElementById('stats').textContent = `${D.b.length.toLocaleString('fr-FR')} bâtiments · relief ${Math.round(zmin)}–${Math.round(zmax)} m`;
@@ -780,7 +813,7 @@ document.getElementById('toggle').addEventListener('click', e => { panel.classLi
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); labelRenderer.setSize(innerWidth, innerHeight); });
 loadingEl.remove();
 if (BUS.home && BUS.work) goStop(now0.secs < 12 * 3600 ? BUS.home : BUS.work);  // le matin : le départ ; l'après-midi : le retour
-else { controls.target.set(SX / 2, 60, -SY / 2); camera.position.set(SX / 2 + 2600, 3660, -SY / 2 + 3600); controls.update(); allerA('choix'); }
+else { viser(SX / 2, 60, SY / 2, 10); allerA('choix'); }
 renderer.setAnimationLoop(() => {
   updateBuses(); controls.update();
   for (const l of stopLabels) l.visible = l.userData.name === selStop || camera.position.distanceTo(l.position) < LABEL_DIST;
