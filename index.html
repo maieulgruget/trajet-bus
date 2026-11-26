@@ -112,6 +112,25 @@ button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 #toggle { margin-top: 4px; }
 .collapsed .body { display: none; }
 #loading { position: fixed; inset: 0; display: grid; place-items: center; color: var(--muted); }
+/* Ordinateur : les sources ne passent plus sous le panneau des départs ; un bouton « Grand écran ». */
+#bEcran { display: none; }
+@media (min-width: 900px) {
+  .src { left: 370px; }
+  #bEcran { display: inline-block; }
+  .panel { max-width: 340px; }
+  @media (hover: hover) { button:hover { border-color: var(--gold); } }
+}
+/* Grand écran : pour un écran qu'on regarde de loin (dans l'entrée, sur un second écran). Il reste l'heure et les
+   prochains départs, en grand ; la maquette continue de vivre derrière. Les commandes reviennent au mouvement de la souris. */
+body.ecran .panel > :not(.clock), body.ecran .src, body.ecran #businfo, body.ecran #dep::before, body.ecran #dep h2 button, body.ecran #dep .mini, body.ecran #dep > p { display: none !important; }
+body.ecran .panel { left: 2vw; top: 2vw; max-width: none; padding: 1vw 1.6vw; border-radius: 16px; }
+body.ecran .clock { font-size: clamp(14px, 1.3vw, 28px); gap: 0.8em; }
+body.ecran .clock strong { font-size: clamp(34px, 4.4vw, 96px); line-height: 1; }
+body.ecran #dep { left: 2vw; bottom: 2vw; max-height: none; overflow: hidden; border-radius: 12px; pointer-events: none; }
+body.ecran:not(.ecranactif), body.ecran:not(.ecranactif) * { cursor: none !important; }
+#barreEcran { position: fixed; right: 2vw; bottom: 2vw; z-index: 5; opacity: 0; pointer-events: none; transition: opacity .35s; }
+#barreEcran button { background: var(--panel); border-radius: 999px; padding: 8px 15px; font-size: 14px; }
+body.ecran.ecranactif #barreEcran { opacity: 1; pointer-events: auto; }
 </style>
 </head>
 <body>
@@ -126,6 +145,7 @@ button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
     <button type="button" id="sWork" data-stop="" hidden></button>
     <button type="button" id="bItin">Itinéraire</button>
     <button type="button" id="bVue" aria-pressed="false" aria-label="Basculer entre la vue en plan et la vue en relief">Vue 2D</button>
+    <button type="button" id="bEcran" title="Grand écran (touche F)" aria-label="Affichage grand écran : l'heure et les prochains départs, en grand">Grand écran</button>
   </div>
   <div class="body">
     <div class="row" style="margin:6px 0 4px">
@@ -151,6 +171,7 @@ button:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 <div id="dep" hidden></div>
 <div id="businfo" hidden></div>
 <div class="src" id="src"></div>
+<div id="barreEcran"><button type="button">Quitter le grand écran</button></div>
 
 <script type="importmap">
 { "imports": {
@@ -890,6 +911,32 @@ majLegende();
 const panel = document.getElementById('panel');
 panel.classList.add('collapsed');
 document.getElementById('toggle').addEventListener('click', e => { panel.classList.toggle('collapsed'); e.target.textContent = panel.classList.contains('collapsed') ? 'Réglages et légende' : 'Masquer'; });
+/* Grand écran : bouton (sur ordinateur), touche F, ou adresse suivie de ?ecran (sans le plein écran, que le navigateur
+   n'accorde qu'à un geste). Le panneau des départs est agrandi d'un bloc, en proportion de la largeur de l'écran. */
+{
+  const corps = document.body, dep = document.getElementById('dep'); let plein = false, t = null;
+  const enEcran = () => corps.classList.contains('ecran');
+  const taille = () => { dep.style.zoom = enEcran() ? Math.max(1.2, Math.min(2.6, innerWidth / 900)).toFixed(2) : ''; };
+  const reveler = () => { corps.classList.add('ecranactif'); clearTimeout(t); t = setTimeout(() => corps.classList.remove('ecranactif'), 3000); };
+  const ecran = (oui, pleinEcran) => {
+    if (oui === enEcran()) return;
+    corps.classList.toggle('ecran', oui); dep.classList.remove('reduit'); taille();
+    if (oui) { reveler(); if (pleinEcran !== false && document.documentElement.requestFullscreen && !document.fullscreenElement) { plein = true; document.documentElement.requestFullscreen().catch(() => { plein = false; }); } }
+    else { corps.classList.remove('ecranactif'); if (document.fullscreenElement && plein) document.exitFullscreen().catch(() => { }); plein = false; }
+  };
+  document.getElementById('bEcran').addEventListener('click', () => ecran(true));
+  document.querySelector('#barreEcran button').addEventListener('click', () => ecran(false));
+  document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && enEcran() && plein) ecran(false); });
+  document.addEventListener('mousemove', () => { if (enEcran()) reveler(); });
+  document.addEventListener('touchstart', () => { if (enEcran()) reveler(); }, { passive: true });
+  addEventListener('resize', taille);
+  document.addEventListener('keydown', e => {
+    if (e.target.closest && e.target.closest('input, select, textarea')) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === 'f' || e.key === 'F') ecran(!enEcran()); else if (e.key === 'Escape' && enEcran()) ecran(false);
+  });
+  if (new URLSearchParams(location.search).has('ecran')) ecran(true, false);
+}
 
 addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); labelRenderer.setSize(innerWidth, innerHeight); });
 loadingEl.remove();
